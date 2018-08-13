@@ -136,6 +136,8 @@ class DepthToColorSyncRender {
   	gl.uniform2f(gl.getUniformLocation(d2c, 'colorFocalLength'), colorfocalx, colorfocaly);
   	gl.uniform2f(gl.getUniformLocation(d2c, 'colorOffset'), coloroffsetx, coloroffsety);
   	gl.uniformMatrix4fv(gl.getUniformLocation(d2c, "depthToColor"), false, cameraParams.depthToColor);
+  	gl.uniform1i(gl.getUniformLocation(d2c, "depthDistortionModel"), cameraParams.depthDistortionModel);
+  	gl.uniform1fv(gl.getUniformLocation(d2c, "depthDistortionCoeffs"), cameraParams.depthDistortioncoeffs);
 
   	const render = this.programs.render;
   	gl.useProgram(render);
@@ -163,15 +165,40 @@ class DepthToColorSyncRender {
   	// first pass would be mapping depth to color for all pixels.
   	const depthToColorVertex = `#version 300 es
   	  precision highp float;
+
+  	  #define DISTORTION_INVERSE_BROWN_CONRADY 2
+
   	  uniform float depthScale;
   	  uniform vec2 depthOffset;
   	  uniform vec2 colorOffset;
   	  uniform vec2 depthFocalLength;
   	  uniform vec2 colorFocalLength;
   	  uniform mat4 depthToColor;
+  	  uniform int depthDistortionModel;
+  	  uniform float depthDistortionCoeffs[5];
+
   	  uniform sampler2D sDepth;
 
   	  out vec4 position;
+
+  	  vec4 depthDeproject(vec2 index, float depth) {
+  	    vec2 position2d = (index - depthOffset) / depthFocalLength;
+  	    if(depthDistortionModel == DISTORTION_INVERSE_BROWN_CONRADY) {
+  	      float r2 = dot(position2d, position2d);
+  	      float f = 1.0
+  	              + depthDistortionCoeffs[0] * r2
+  	              + depthDistortionCoeffs[1] * r2 * r2
+  	              + depthDistortionCoeffs[4] * r2 * r2 * r2;
+  	      float ux = position2d.x * f
+  	               + 2.0 * depthDistortionCoeffs[2] * position2d.x * position2d.y
+  	               + depthDistortionCoeffs[3] * (r2 + 2.0 * position2d.x * position2d.x);
+  	      float uy = position2d.y * f
+  	               + 2.0 * depthDistortionCoeffs[3] * position2d.x * position2d.y
+  	               + depthDistortionCoeffs[2] * (r2 + 2.0 * position2d.y * position2d.y);
+  	      position2d = vec2(ux, uy);
+  	    }
+  	    return vec4(position2d * depth, depth, 1.0);
+  	  }
 
   	  void main(){
   	    // Get the texture coordinates in range from [0, 0] to [1, 1]
@@ -190,11 +217,11 @@ class DepthToColorSyncRender {
   	    // X and Y are the position within the depth texture (adjusted
   	    // so that it matches the position of the RGB texture), Z is
   	    // the depth.
-  	    vec2 position2d = (depth_texture_coord - depthOffset) / depthFocalLength;
-  	    vec3 depthPos = vec3(position2d * depth_scaled, depth_scaled);
-  	    vec4 colorPos = depthToColor * vec4(depthPos, 1.0);
+        
+  	    vec4 depthPos = depthDeproject(depth_texture_coord, depth_scaled);
+  	    vec4 colorPos = depthToColor * depthPos;
   	    
-  	    position2d = colorPos.xy / colorPos.z;
+  	    vec2 position2d = colorPos.xy / colorPos.z;
   	    // color texture coordinate.
   	    vec2 v = position2d * colorFocalLength + colorOffset;
   	    position = colorPos;
